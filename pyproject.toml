@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "abtem-tools"
+version = "0.1.0"
+authors = [
+  { name="Steven Zeltmann", email="steven.zeltmann@cornell.edu" },
+]
+description = "A collection of small extensions for abTEM."
+readme = "README.md"
+requires-python = ">=3.10"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Operating System :: OS Independent",
+]
+dependencies = [
+  "abtem=1.0.0b34",
+]
+
+[project.urls]
+"Homepage" = "https://github.com/sezelt/abtem-tools"
+"Bug Tracker" = "https://github.com/sezelt/abtem-tools/issues"
+
+[tool.pyright]
+venv = "abtem"
