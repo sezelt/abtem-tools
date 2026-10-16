@@ -30,6 +30,72 @@ def _as_int_pair(value):
     return value
 
 
+def _bin_boundaries(n_old, n_new, xp):
+    """
+    Compute the pixel boundaries for sum-binning a zero-centered (fftshifted) grid of n_old pixels into n_new bins.
+
+    Bin j spans the input pixels [boundaries[j], boundaries[j + 1]). Both grids span the same extent, so bin j
+    collects every input pixel whose center falls inside the angular extent of the j-th output pixel. When
+    n_new = n_old // f with f dividing n_old, this reduces to the usual i // f binning.
+
+    Parameters
+    ----------
+    n_old : int
+        Number of pixels of the zero-centered input grid.
+    n_new : int
+        Number of pixels of the zero-centered binned grid, with 1 <= n_new <= n_old.
+    xp : numpy or cupy
+        Array module to build the boundary array with.
+
+    Returns
+    -------
+    array of int
+        Array of length n_new + 1 with the bin boundaries.
+    """
+    j = xp.arange(n_new + 1, dtype=xp.int64)
+    # boundaries[j] = ceil((2*j*n_old - (n_old % 2)*n_new) / (2*n_new)), evaluated with exact integer
+    # floor division so it works identically on numpy and cupy
+    return (2 * j * n_old + (2 - n_old % 2) * n_new - 1) // (2 * n_new)
+
+
+def _mean_bin_axis(array, n_old, n_new, xp):
+    """
+    Average the last axis of array from n_old to n_new pixels, assuming both grids are zero-centered
+    (fftshifted) and span the same extent. Leading batch dimensions are preserved.
+
+    Each output pixel is the mean of the input pixels inside its extent -- the bin's integrated signal
+    divided by the number of input pixels it contains, i.e. its area. This makes the binned array an
+    estimate of the intensity field on the coarser grid: a uniform input stays uniform even though the
+    bins can contain different numbers of input pixels.
+
+    Parameters
+    ----------
+    array : array
+        Array with n_old pixels along the last axis.
+    n_old : int
+        Number of pixels of the input grid along the last axis.
+    n_new : int
+        Number of pixels of the binned grid along the last axis.
+    xp : numpy or cupy
+        Array module.
+
+    Returns
+    -------
+    array
+        Array with n_new pixels along the last axis, where each pixel is the mean of the input pixels
+        that fall inside its extent.
+    """
+    if n_new == n_old:
+        return array
+    boundaries = _bin_boundaries(n_old, n_new, xp)
+    cumulative = xp.concatenate((xp.zeros(array.shape[:-1] + (1,), dtype=array.dtype),
+                                 xp.cumsum(array, axis=-1)), axis=-1)
+    sums = cumulative[..., boundaries[1:]] - cumulative[..., boundaries[:-1]]
+    counts = boundaries[1:] - boundaries[:-1]
+    counts = counts.reshape((1,) * (array.ndim - 1) + (n_new,)).astype(array.dtype)
+    return sums / counts
+
+
 class ConfocalDetector(abtem.detect.AbstractDetector):
     """
     Detector that records the square magnitude of the wave in real space.
@@ -434,12 +500,98 @@ class ConfocalDetector(abtem.detect.AbstractDetector):
 
 class BinnedPixelatedDetector(abtem.PixelatedDetector):
     """
-    just like abtem.PixelatedDetector but also accepts an extra argument for binning of the patterns
-    binfactor: set binning level
+    Pixelated detector that records diffraction patterns binned into a coarser pixel grid.
+
+    Like abtem.PixelatedDetector, but each recorded pixel is the mean of the far-field pixels that fall
+    inside its angular extent -- the bin's integrated signal divided by the number of contributing
+    pixels, i.e. its area -- instead of recording one pixel per far-field grid point. Averaging a range
+    of pixels, rather than sampling points, avoids the aliasing artifacts that point sampling causes
+    when resampling diffraction data onto a coarser grid, and the normalization by the number of
+    contributing pixels keeps a uniform far field uniform even when the bins contain different pixel
+    counts. The binned array is therefore an estimate of the intensity field on the coarser grid, not
+    an integrated flux; multiply by the binned pixel area (sampling squared) to recover fluxes.
+
+    The size of the binned grid is specified with exactly one of
+    binfactor : int
+        An integer binning factor. The far-field size of each axis is divided by this factor (integer
+        division). When the factor divides the far-field size, each binned pixel is the mean of exactly
+        binfactor x binfactor far-field pixels and the binned angular sampling is binfactor times the
+        far-field sampling.
+    gpts : int or (int, int)
+        The exact number of pixels of the binned patterns. The binned grid spans the same angular extent
+        as the far field (cropped to max_angle), so its angular sampling is the far-field sampling scaled
+        by the ratio of the far-field to binned grid size, which in general is not an integer; the
+        far-field pixels are assigned to bins by their angular position.
+
+    If neither binfactor nor gpts is given, binfactor defaults to 1 and the detector behaves like an
+    unbinned abtem.PixelatedDetector. In 'complex' mode the complex amplitudes are coherently averaged.
+
+    Parameters
+    ----------
+    max_angle : float or str
+        The maximum angle of the diffraction patterns. Either a number in radians or one of the strings
+        'limit', 'valid', or 'full'.
+    mode : str
+        'intensity' to record the intensity, 'complex' to record the complex far field.
+    save_file : str
+        If set, the measurement is written to this hdf5 file.
+    binfactor : int
+        Integer binning factor (see above).
+    gpts : int or (int, int)
+        Number of pixels of the binned patterns (see above).
     """
-    def __init__(self, *args, **kwargs):
-        self._binning = kwargs.pop('binfactor',1)
-        super().__init__(*args, **kwargs)
+
+    def __init__(self, max_angle: Union[str, float] = 'valid', mode='intensity', save_file: str = None,
+                 binfactor: int = None, gpts: Union[int, Tuple[int, int]] = None):
+        if (binfactor is not None) and (gpts is not None):
+            raise ValueError('specify either binfactor or gpts, not both')
+        if binfactor is not None:
+            if (not isinstance(binfactor, (int, np.integer))) or binfactor < 1:
+                raise ValueError('binfactor must be a positive integer, got {}'.format(binfactor))
+            binfactor = int(binfactor)
+        elif gpts is not None:
+            gpts = _as_int_pair(gpts)
+        else:
+            binfactor = 1
+        self._binfactor = binfactor
+        self._gpts = gpts
+        super().__init__(max_angle=max_angle, resample=False, mode=mode, save_file=save_file)
+
+    @property
+    def binfactor(self):
+        return self._binfactor
+
+    @property
+    def gpts(self):
+        return self._gpts
+
+    def _binned_gpts(self, gpts_old):
+        """
+        Compute the pixel count of the binned patterns from the pixel count of the far field.
+
+        Parameters
+        ----------
+        gpts_old : tuple of int
+            The pixel count of the far field before binning.
+
+        Returns
+        -------
+        tuple of int
+            The pixel count of the binned patterns.
+        """
+        if self._gpts is not None:
+            gpts_new = self._gpts
+        else:
+            gpts_new = (gpts_old[0] // self._binfactor, gpts_old[1] // self._binfactor)
+        for old, new in zip(gpts_old, gpts_new):
+            if new < 1:
+                raise ValueError('binning would leave fewer than one pixel per axis ({} -> {}); '
+                                 'choose a smaller binning'.format(gpts_old, gpts_new))
+            if new > old:
+                raise ValueError('the binned grid ({}) must not be larger than the far field ({}); '
+                                 'binning only coarsens the grid, use abtem.PixelatedDetector with '
+                                 "resample='uniform' to resample to a finer grid".format(gpts_new, gpts_old))
+        return gpts_new
 
     def allocate_measurement(self, waves, scan: abtem.scan.AbstractScan = None) -> abtem.Measurement:
         """
@@ -462,12 +614,13 @@ class BinnedPixelatedDetector(abtem.PixelatedDetector):
         waves.accelerator.check_is_defined()
         abtem.detect.check_max_angle_exceeded(waves, self.max_angle)
 
-        gpts = waves.downsampled_gpts(self.max_angle)
-        # print(f"Old gpts: {gpts}")
-        # gpts, new_angular_sampling = self._resampled_gpts(gpts, angular_sampling=waves.angular_sampling)
-        gpts = gpts[0] // self._binning, gpts[1]//self._binning
-        new_angular_sampling = waves.angular_sampling[0] * self._binning, waves.angular_sampling[1] * self._binning
-        # print(f"New gpts: {gpts}")
+        gpts_old = waves.downsampled_gpts(self.max_angle)
+        gpts = self._binned_gpts(gpts_old)
+
+        # The binned grid spans the same angular extent as the far field, so its angular sampling is the
+        # far-field sampling scaled by the ratio of the far-field to binned grid size.
+        new_angular_sampling = (gpts_old[0] / gpts[0] * waves.angular_sampling[0],
+                                gpts_old[1] / gpts[1] * waves.angular_sampling[1])
 
         sampling = (1 / new_angular_sampling[0] / gpts[0] * waves.wavelength * 1000,
                     1 / new_angular_sampling[1] / gpts[1] * waves.wavelength * 1000)
@@ -501,37 +654,11 @@ class BinnedPixelatedDetector(abtem.PixelatedDetector):
             measurement = measurement.write(self.save_file)
         return measurement
 
-    def bin2D(self, array, factor, xp, dtype=np.float32):
-        """
-        Bin a 2D ndarray by binfactor.
-    
-        Args:
-            array (2D numpy array):
-            factor (int): the binning factor
-            dtype (numpy dtype): datatype for binned array. default is numpy default for
-                np.zeros()
-    
-        Returns:
-            the binned array
-        """
-        x, y = array.shape[-2:]
-        binx, biny = x // factor, y // factor
-        xx, yy = binx * factor, biny * factor
-    
-        # Make a binned array on the device
-        binned_ar = xp.zeros((array.shape[0], binx, biny), dtype=dtype)
-        array = array.astype(dtype)
-    
-        # Collect pixel sums into new bins
-        for ix in range(factor):
-            for iy in range(factor):
-                binned_ar += array[:, 0 + ix:xx + ix:factor, 0 + iy:yy + iy:factor]
-        return binned_ar
-
     def detect(self, waves) -> np.ndarray:
         """
-        Calculate the far field intensity of the wave functions. The output is cropped to include the non-suppressed
-        frequencies from the antialiased 2D fourier spectrum.
+        Calculate the far field intensity of the wave functions and average it into the binned grid. The
+        output is cropped to include the non-suppressed frequencies from the antialiased 2D fourier
+        spectrum.
 
         Parameters
         ----------
@@ -540,8 +667,8 @@ class BinnedPixelatedDetector(abtem.PixelatedDetector):
 
         Returns
         -------
-            Detected values. The first dimension indexes the batch size, the second and third indexes the two components
-            of the spatial frequency.
+            Detected values. The first dimension indexes the batch size, the second and third indexes the
+            two components of the spatial frequency.
         """
 
         xp = abtem.device.get_array_module(waves.array)
@@ -558,7 +685,10 @@ class BinnedPixelatedDetector(abtem.PixelatedDetector):
 
         array = xp.fft.fftshift(array, axes=(-2, -1))
 
-        # bin the array
-        array = self.bin2D(array, self._binning, xp, dtype=array.dtype)
-        
+        # Mean-bin the y axis (last), then the x axis (via transposes)
+        gpts_old = array.shape[-2:]
+        gpts_new = self._binned_gpts(gpts_old)
+        array = _mean_bin_axis(array, gpts_old[1], gpts_new[1], xp)
+        array = _mean_bin_axis(array.swapaxes(-2, -1), gpts_old[0], gpts_new[0], xp).swapaxes(-2, -1)
+
         return array
