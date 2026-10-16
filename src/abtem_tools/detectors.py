@@ -57,11 +57,12 @@ class ConfocalDetector(abtem.detect.AbstractDetector):
         centered on the probe position of each wave in the batch; the positions are passed together with the
         waves via detect_at, which PositionAwareProbe does automatically for each detected batch during a
         scan. If given as a pair, the crop box is centered on the given position. If None, the crop box is
-        centered on the origin of the wave in the conventional (fftshift) ordering and regions outside the
-        wave are zero-padded.
+        centered on the origin of the wave (so the origin sits at the center of the image); regions outside
+        the wave are wrapped (periodic) or zero-padded (non-periodic).
     periodic : bool, optional
-        If True, the wave is treated as periodic and the crop box wraps around the edges of the grid instead
-        of zero-padding regions outside the wave. Default is False.
+        If True (default), the wave is treated as periodic and the crop box wraps around the edges of the
+        grid instead of zero-padding regions outside the wave. For probe-centered detection wrapping is the
+        physically correct behavior near the edges of the scan; set to False to zero-pad instead.
     save_file : str
         The path to the file used for saving the detector output.
     """
@@ -72,7 +73,7 @@ class ConfocalDetector(abtem.detect.AbstractDetector):
                  sampling: Union[float, Tuple[float, float]] = None,
                  ctf: abtem.transfer.CTF = None,
                  center: Union[Tuple[float, float], str] = 'probe',
-                 periodic: bool = False,
+                 periodic: bool = True,
                  save_file: str = None):
 
         given = [name for name, value in (('gpts', gpts), ('extent', extent), ('sampling', sampling))
@@ -227,7 +228,9 @@ class ConfocalDetector(abtem.detect.AbstractDetector):
             d_old = e_old / n
             d_new = e_new / m
 
-            x_old = (xp.arange(n, dtype=xp.float32) - n / 2) * d_old
+            # the wave is in natural (un-shifted) ordering (index i holds the wave at physical coordinate
+            # i * d_old); the image grid is centered on the origin (index j is at (j - m/2) * d_new)
+            x_old = xp.arange(n, dtype=xp.float32) * d_old
             x_new = (xp.arange(m, dtype=xp.float32) - m / 2) * d_new
 
             distances = x_new[None] - x_old[:, None]
@@ -347,6 +350,18 @@ class ConfocalDetector(abtem.detect.AbstractDetector):
                 interpolate_bilinear = abtem.device.get_device_function(xp, 'interpolate_bilinear')
                 v, u, vw, uw = self._bilinear_nodes_and_weights(waves.gpts, waves.extent, gpts, extent, xp)
                 array = interpolate_bilinear(array, v, u, vw, uw)
+                # interpolate_bilinear clamps its gather to the array boundary, so pixels outside the
+                # wave's support (whose weights are zeroed) still receive the boundary value; zero them
+                # to give true zero padding. The bounds mirror _bilinear_nodes_and_weights exactly.
+                inside = []
+                for m, e_new, n, e_old in zip(gpts, extent, waves.gpts, waves.extent):
+                    x_new = (xp.arange(m, dtype=xp.float32) - m / 2) * (e_new / m)
+                    x_old_max = (xp.arange(n, dtype=xp.float32) * (e_old / n))[-1]
+                    inside.append(((x_new >= 0) & (x_new <= x_old_max)).astype(xp.float32))
+                mask = inside[0][:, None] * inside[1][None, :]
+                if array.ndim == 3:
+                    mask = mask[None, ...]
+                array = array * mask
             return array
 
         center = (0., 0.) if self._center is None else self._center
@@ -396,9 +411,9 @@ class ConfocalDetector(abtem.detect.AbstractDetector):
         if self._periodic:
             valid0 = valid1 = None
         else:
-            # zero-pad pixels outside the wave's physical extent [-extent/2, extent/2)
-            valid0 = (s0 >= -n0 / 2) & (s0 <= n0 / 2 - 1)
-            valid1 = (s1 >= -n1 / 2) & (s1 <= n1 / 2 - 1)
+            # zero-pad pixels outside the wave's physical extent [0, extent)
+            valid0 = (s0 >= 0) & (s0 < n0)
+            valid1 = (s1 >= 0) & (s1 < n1)
 
         ib = xp.arange(array.shape[0])[:, None, None]
         a0 = v0[:, :, None]
