@@ -16,7 +16,7 @@ classifiers = [
     "Operating System :: OS Independent",
 ]
 dependencies = [
-  "abtem=1.0.0b34",
+  "abtem==1.0.0b34",
 ]
 
 [project.urls]
