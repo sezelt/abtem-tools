@@ -19,8 +19,10 @@ Convention differences versus the new abtem (this port follows abtem-legacy):
   compensates by multiplying ``energy2sigma(energy)`` in its ``scatter``; the product is the same).
 - The legacy filling factor is ``sqrt(4 * l + 2)`` rather than the new abtem's ``sqrt(2)``; the two
   are identical for K-shell transitions (``l = 0``), which is the main use case (e.g. C KLL, Si KLL).
-- The legacy transition-potential machinery does not apply the new abtem's ``k <= 2/3 * max(k)``
-  reciprocal-space mask and integrates over a fixed radial grid (``linspace(0, 20, 10000)``).
+- The legacy transition-potential machinery integrates over a fixed radial grid
+  (``linspace(0, 20, 10000)``). The new abtem's reciprocal-space mask
+  (``k <= 2/3 * max(k)``, computed per transition because the axial momentum transfer differs for
+  each transition) is applied by :attr:`CoreLossTransitionPotential.array`.
 
 numpy 2.x compatibility
 -----------------------
@@ -258,11 +260,26 @@ class CoreLossTransitionPotential:
         The stacked reciprocal-space transition potentials.
 
         Shape is ``(n_transitions, gpts[0], gpts[1])``. Built on first access and cached.
+
+        The new abtem's reciprocal-space mask is applied, so that only scattering vectors with
+        magnitude ``k <= 2/3 * max(k)`` contribute; ``k`` includes the axial momentum transfer of
+        the transition, which differs for each transition, so the mask is computed per transition.
         """
 
         if self._array_cache is None:
-            self._array_cache = np.stack([t._evaluate_potential() for t in self.transitions]).astype(
+            array = np.stack([t._evaluate_potential() for t in self.transitions]).astype(
                 np.complex64, copy=False)
+            # The new abtem's reciprocal-space mask (k <= 2/3 * max(k)), applied per transition
+            # because the axial momentum transfer kz = k0 - kn depends on the energy loss of the
+            # transition. Zeroing the high-k pixels here is equivalent to the new abtem skipping
+            # them in the form-factor accumulation: every pixel has k > 0 (the center pixel has
+            # k = |kz|), so no division by zero is introduced.
+            kx, ky = abtem.utils.spatial_frequencies(self.gpts, self.sampling)
+            kt, _ = abtem.utils.polar_coordinates(kx, ky)
+            for i, t in enumerate(self.transitions):
+                k = np.sqrt(kt**2 + t.momentum_transfer**2)
+                array[i][k > np.max(k) * 2. / 3.] = 0.
+            self._array_cache = array
         return self._array_cache
 
     def __len__(self) -> int:
