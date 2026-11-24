@@ -12,7 +12,7 @@ def _as_pair(value):
     if isinstance(value, (int, float)):
         return (float(value), float(value))
     if len(value) != 2:
-        raise ValueError('value should be a scalar or a pair, got {}'.format(value))
+        raise ValueError("value should be a scalar or a pair, got {}".format(value))
     return (float(value[0]), float(value[1]))
 
 
@@ -23,10 +23,10 @@ def _as_int_pair(value):
     if isinstance(value, (int, float)):
         value = (value, value)
     if len(value) != 2:
-        raise ValueError('value should be a scalar or a pair, got {}'.format(value))
+        raise ValueError("value should be a scalar or a pair, got {}".format(value))
     value = (int(value[0]), int(value[1]))
     if min(value) < 1:
-        raise ValueError('gpts must be at least 1, got {}'.format(value))
+        raise ValueError("gpts must be at least 1, got {}".format(value))
     return value
 
 
@@ -88,8 +88,13 @@ def _mean_bin_axis(array, n_old, n_new, xp):
     if n_new == n_old:
         return array
     boundaries = _bin_boundaries(n_old, n_new, xp)
-    cumulative = xp.concatenate((xp.zeros(array.shape[:-1] + (1,), dtype=array.dtype),
-                                 xp.cumsum(array, axis=-1)), axis=-1)
+    cumulative = xp.concatenate(
+        (
+            xp.zeros(array.shape[:-1] + (1,), dtype=array.dtype),
+            xp.cumsum(array, axis=-1),
+        ),
+        axis=-1,
+    )
     sums = cumulative[..., boundaries[1:]] - cumulative[..., boundaries[:-1]]
     counts = boundaries[1:] - boundaries[:-1]
     counts = counts.reshape((1,) * (array.ndim - 1) + (n_new,)).astype(array.dtype)
@@ -133,21 +138,32 @@ class ConfocalDetector(abtem.detect.AbstractDetector):
         The path to the file used for saving the detector output.
     """
 
-    def __init__(self,
-                 gpts: Union[int, Tuple[int, int]] = None,
-                 extent: Union[float, Tuple[float, float]] = None,
-                 sampling: Union[float, Tuple[float, float]] = None,
-                 ctf: abtem.transfer.CTF = None,
-                 center: Union[Tuple[float, float], str] = 'probe',
-                 periodic: bool = True,
-                 save_file: str = None):
+    def __init__(
+        self,
+        gpts: Union[int, Tuple[int, int]] = None,
+        extent: Union[float, Tuple[float, float]] = None,
+        sampling: Union[float, Tuple[float, float]] = None,
+        ctf: abtem.transfer.CTF = None,
+        center: Union[Tuple[float, float], str] = "probe",
+        periodic: bool = True,
+        save_file: str = None,
+    ):
 
-        given = [name for name, value in (('gpts', gpts), ('extent', extent), ('sampling', sampling))
-                 if value is not None]
+        given = [
+            name
+            for name, value in (
+                ("gpts", gpts),
+                ("extent", extent),
+                ("sampling", sampling),
+            )
+            if value is not None
+        ]
         if len(given) != 2:
-            raise ValueError('exactly two of gpts, extent, and sampling must be specified (the remaining one is '
-                             'inferred from the other two); got: '
-                             + (', '.join(given) if given else 'none'))
+            raise ValueError(
+                "exactly two of gpts, extent, and sampling must be specified (the remaining one is "
+                "inferred from the other two); got: "
+                + (", ".join(given) if given else "none")
+            )
 
         gpts = _as_int_pair(gpts)
         extent = _as_pair(extent)
@@ -160,7 +176,7 @@ class ConfocalDetector(abtem.detect.AbstractDetector):
         else:
             sampling = tuple(e / g for e, g in zip(extent, gpts))
 
-        if center is not None and center != 'probe':
+        if center is not None and center != "probe":
             center = _as_pair(center)
 
         self._gpts = gpts
@@ -188,7 +204,9 @@ class ConfocalDetector(abtem.detect.AbstractDetector):
     @extent.setter
     def extent(self, value):
         self._extent = _as_pair(value)
-        self._gpts = tuple(max(1, int(np.round(e / s))) for e, s in zip(self._extent, self._sampling))
+        self._gpts = tuple(
+            max(1, int(np.round(e / s))) for e, s in zip(self._extent, self._sampling)
+        )
 
     @property
     def sampling(self):
@@ -197,7 +215,9 @@ class ConfocalDetector(abtem.detect.AbstractDetector):
     @sampling.setter
     def sampling(self, value):
         self._sampling = _as_pair(value)
-        self._gpts = tuple(max(1, int(np.round(e / s))) for e, s in zip(self._extent, self._sampling))
+        self._gpts = tuple(
+            max(1, int(np.round(e / s))) for e, s in zip(self._extent, self._sampling)
+        )
 
     @property
     def ctf(self) -> abtem.transfer.CTF:
@@ -213,7 +233,7 @@ class ConfocalDetector(abtem.detect.AbstractDetector):
 
     @center.setter
     def center(self, value):
-        if value is not None and value != 'probe':
+        if value is not None and value != "probe":
             value = _as_pair(value)
         self._center = value
 
@@ -250,23 +270,29 @@ class ConfocalDetector(abtem.detect.AbstractDetector):
         -------
             The detected images, as for detect.
         """
-        if self._center != 'probe':
-            raise ValueError("detect_at requires the detector to be configured with center='probe'; with a "
-                             'fixed center the crop is already centered and detect(waves) needs no positions.')
+        if self._center != "probe":
+            raise ValueError(
+                "detect_at requires the detector to be configured with center='probe'; with a "
+                "fixed center the crop is already centered and detect(waves) needs no positions."
+            )
         positions = np.asarray(positions, dtype=np.float64)
         if positions.ndim == 1:
             positions = positions[None, :]
         if positions.ndim != 2 or positions.shape[1] != 2:
-            raise ValueError('positions should be a pair [x, y] or an (N, 2) array, '
-                             'got shape {}'.format(positions.shape))
+            raise ValueError(
+                "positions should be a pair [x, y] or an (N, 2) array, "
+                "got shape {}".format(positions.shape)
+            )
 
         batch = 1 if waves.array.ndim == 2 else waves.array.shape[0]
         if positions.shape[0] != batch:
-            raise RuntimeError('detect_at requires one position per wave in the batch (got {} waves and '
-                               '{} positions).'.format(batch, positions.shape[0]))
+            raise RuntimeError(
+                "detect_at requires one position per wave in the batch (got {} waves and "
+                "{} positions).".format(batch, positions.shape[0])
+            )
 
         xp = abtem.device.get_array_module(waves.array)
-        abs2 = abtem.device.get_device_function(xp, 'abs2')
+        abs2 = abtem.device.get_device_function(xp, "abs2")
 
         if self._ctf is not None:
             waves = waves.apply_ctf(self._ctf)
@@ -300,21 +326,23 @@ class ConfocalDetector(abtem.detect.AbstractDetector):
             x_new = (xp.arange(m, dtype=xp.float32) - m / 2) * d_new
 
             distances = x_new[None] - x_old[:, None]
-            distances[distances < 0.] = np.inf
+            distances[distances < 0.0] = np.inf
 
             w = distances.min(0) / d_old
-            w[w == np.inf] = 0.
+            w[w == np.inf] = 0.0
 
             # points outside the support of the wave are set to zero
             outside = (x_new < x_old[0]) | (x_new > x_old[-1])
-            w[outside] = 0.
+            w[outside] = 0.0
 
             nodes.append(distances.argmin(0))
             weights.append(w)
 
         v, u = nodes
         vw, uw = weights
-        v, u, vw, uw = xp.broadcast_arrays(v[:, None], u[None, :], vw[:, None], uw[None, :])
+        v, u, vw, uw = xp.broadcast_arrays(
+            v[:, None], u[None, :], vw[:, None], uw[None, :]
+        )
         return v, u, vw, uw
 
     def _image_calibrations(self, gpts, extent, sampling):
@@ -325,19 +353,33 @@ class ConfocalDetector(abtem.detect.AbstractDetector):
         of each individual image).
         """
         if self._center is None and not self._periodic:
-            return abtem.measure.calibrations_from_grid(gpts, sampling, names=['x', 'y'], units='Å')
+            return abtem.measure.calibrations_from_grid(
+                gpts, sampling, names=["x", "y"], units="Å"
+            )
 
-        if self._center is not None and self._center != 'probe':
+        if self._center is not None and self._center != "probe":
             reference = self._center
         else:
-            reference = (0., 0.)
+            reference = (0.0, 0.0)
 
-        return (abtem.measure.Calibration(offset=reference[0] - extent[0] / 2, sampling=sampling[0],
-                                          units='Å', name='x'),
-                abtem.measure.Calibration(offset=reference[1] - extent[1] / 2, sampling=sampling[1],
-                                          units='Å', name='y'))
+        return (
+            abtem.measure.Calibration(
+                offset=reference[0] - extent[0] / 2,
+                sampling=sampling[0],
+                units="Å",
+                name="x",
+            ),
+            abtem.measure.Calibration(
+                offset=reference[1] - extent[1] / 2,
+                sampling=sampling[1],
+                units="Å",
+                name="y",
+            ),
+        )
 
-    def allocate_measurement(self, waves, scan: abtem.scan.AbstractScan = None) -> abtem.Measurement:
+    def allocate_measurement(
+        self, waves, scan: abtem.scan.AbstractScan = None
+    ) -> abtem.Measurement:
         """
         Allocate a Measurement object or an hdf5 file.
 
@@ -371,7 +413,9 @@ class ConfocalDetector(abtem.detect.AbstractDetector):
             scan_calibrations = scan.calibrations
 
         array = np.zeros(scan_shape + gpts, dtype=np.float32)
-        measurement = abtem.Measurement(array, calibrations=scan_calibrations + calibrations)
+        measurement = abtem.Measurement(
+            array, calibrations=scan_calibrations + calibrations
+        )
         if isinstance(self.save_file, str):
             measurement = measurement.write(self.save_file)
         return measurement
@@ -395,14 +439,16 @@ class ConfocalDetector(abtem.detect.AbstractDetector):
             components of the real space coordinate.
         """
 
-        if self._center == 'probe':
-            raise RuntimeError("center='probe' requires the probe positions of the batch; use detect_at(waves, "
-                               'positions) to pass them together with the waves, or abtem_tools.'
-                               'PositionAwareProbe, which passes them to the detector automatically for each '
-                               'detected batch.')
+        if self._center == "probe":
+            raise RuntimeError(
+                "center='probe' requires the probe positions of the batch; use detect_at(waves, "
+                "positions) to pass them together with the waves, or abtem_tools."
+                "PositionAwareProbe, which passes them to the detector automatically for each "
+                "detected batch."
+            )
 
         xp = abtem.device.get_array_module(waves.array)
-        abs2 = abtem.device.get_device_function(xp, 'abs2')
+        abs2 = abtem.device.get_device_function(xp, "abs2")
 
         if self._ctf is not None:
             waves = waves.apply_ctf(self._ctf)
@@ -413,8 +459,12 @@ class ConfocalDetector(abtem.detect.AbstractDetector):
 
         if self._center is None and not self._periodic:
             if gpts != waves.gpts:
-                interpolate_bilinear = abtem.device.get_device_function(xp, 'interpolate_bilinear')
-                v, u, vw, uw = self._bilinear_nodes_and_weights(waves.gpts, waves.extent, gpts, extent, xp)
+                interpolate_bilinear = abtem.device.get_device_function(
+                    xp, "interpolate_bilinear"
+                )
+                v, u, vw, uw = self._bilinear_nodes_and_weights(
+                    waves.gpts, waves.extent, gpts, extent, xp
+                )
                 array = interpolate_bilinear(array, v, u, vw, uw)
                 # interpolate_bilinear clamps its gather to the array boundary, so pixels outside the
                 # wave's support (whose weights are zeroed) still receive the boundary value; zero them
@@ -423,14 +473,16 @@ class ConfocalDetector(abtem.detect.AbstractDetector):
                 for m, e_new, n, e_old in zip(gpts, extent, waves.gpts, waves.extent):
                     x_new = (xp.arange(m, dtype=xp.float32) - m / 2) * (e_new / m)
                     x_old_max = (xp.arange(n, dtype=xp.float32) * (e_old / n))[-1]
-                    inside.append(((x_new >= 0) & (x_new <= x_old_max)).astype(xp.float32))
+                    inside.append(
+                        ((x_new >= 0) & (x_new <= x_old_max)).astype(xp.float32)
+                    )
                 mask = inside[0][:, None] * inside[1][None, :]
                 if array.ndim == 3:
                     mask = mask[None, ...]
                 array = array * mask
             return array
 
-        center = (0., 0.) if self._center is None else self._center
+        center = (0.0, 0.0) if self._center is None else self._center
         batch = array.shape[0] if array.ndim == 3 else 1
         centers = np.tile(np.asarray(center, dtype=np.float64), (batch, 1))
         return self._centered_crop(array, waves, gpts, extent, centers, xp)
@@ -456,10 +508,16 @@ class ConfocalDetector(abtem.detect.AbstractDetector):
 
         # physical coordinate of each image pixel relative to the crop center
         # (image axis 0 <-> x = centers[:, 0], image axis 1 <-> y = centers[:, 1])
-        x0 = (xp.asarray(centers[:, 0], dtype=xp.float32)[:, None]
-              - extent[0] / 2 + i0[None, :] * d_new[0])  # (batch, m0)
-        x1 = (xp.asarray(centers[:, 1], dtype=xp.float32)[:, None]
-              - extent[1] / 2 + i1[None, :] * d_new[1])  # (batch, m1)
+        x0 = (
+            xp.asarray(centers[:, 0], dtype=xp.float32)[:, None]
+            - extent[0] / 2
+            + i0[None, :] * d_new[0]
+        )  # (batch, m0)
+        x1 = (
+            xp.asarray(centers[:, 1], dtype=xp.float32)[:, None]
+            - extent[1] / 2
+            + i1[None, :] * d_new[1]
+        )  # (batch, m1)
 
         # the wave array is in natural (un-shifted) ordering, so physical coordinate 0 is at index 0 and index
         # i holds the wave at physical coordinate i * d_old (mod extent). The source index of a pixel at
@@ -489,10 +547,12 @@ class ConfocalDetector(abtem.detect.AbstractDetector):
         fa = f0[:, :, None]
         fb = f1[:, None, :]
 
-        out = ((1 - fa) * (1 - fb) * array[ib, a0, b0]
-               + (1 - fa) * fb * array[ib, a0, b1]
-               + fa * (1 - fb) * array[ib, a1, b0]
-               + fa * fb * array[ib, a1, b1])
+        out = (
+            (1 - fa) * (1 - fb) * array[ib, a0, b0]
+            + (1 - fa) * fb * array[ib, a0, b1]
+            + fa * (1 - fb) * array[ib, a1, b0]
+            + fa * fb * array[ib, a1, b1]
+        )
         if valid0 is not None:
             out = out * valid0[:, :, None] * valid1[:, None, :]
         return out[0] if squeezed else out
@@ -541,13 +601,21 @@ class BinnedPixelatedDetector(abtem.PixelatedDetector):
         Number of pixels of the binned patterns (see above).
     """
 
-    def __init__(self, max_angle: Union[str, float] = 'valid', mode='intensity', save_file: str = None,
-                 binfactor: int = None, gpts: Union[int, Tuple[int, int]] = None):
+    def __init__(
+        self,
+        max_angle: Union[str, float] = "valid",
+        mode="intensity",
+        save_file: str = None,
+        binfactor: int = None,
+        gpts: Union[int, Tuple[int, int]] = None,
+    ):
         if (binfactor is not None) and (gpts is not None):
-            raise ValueError('specify either binfactor or gpts, not both')
+            raise ValueError("specify either binfactor or gpts, not both")
         if binfactor is not None:
             if (not isinstance(binfactor, (int, np.integer))) or binfactor < 1:
-                raise ValueError('binfactor must be a positive integer, got {}'.format(binfactor))
+                raise ValueError(
+                    "binfactor must be a positive integer, got {}".format(binfactor)
+                )
             binfactor = int(binfactor)
         elif gpts is not None:
             gpts = _as_int_pair(gpts)
@@ -555,7 +623,9 @@ class BinnedPixelatedDetector(abtem.PixelatedDetector):
             binfactor = 1
         self._binfactor = binfactor
         self._gpts = gpts
-        super().__init__(max_angle=max_angle, resample=False, mode=mode, save_file=save_file)
+        super().__init__(
+            max_angle=max_angle, resample=False, mode=mode, save_file=save_file
+        )
 
     @property
     def binfactor(self):
@@ -585,15 +655,23 @@ class BinnedPixelatedDetector(abtem.PixelatedDetector):
             gpts_new = (gpts_old[0] // self._binfactor, gpts_old[1] // self._binfactor)
         for old, new in zip(gpts_old, gpts_new):
             if new < 1:
-                raise ValueError('binning would leave fewer than one pixel per axis ({} -> {}); '
-                                 'choose a smaller binning'.format(gpts_old, gpts_new))
+                raise ValueError(
+                    "binning would leave fewer than one pixel per axis ({} -> {}); "
+                    "choose a smaller binning".format(gpts_old, gpts_new)
+                )
             if new > old:
-                raise ValueError('the binned grid ({}) must not be larger than the far field ({}); '
-                                 'binning only coarsens the grid, use abtem.PixelatedDetector with '
-                                 "resample='uniform' to resample to a finer grid".format(gpts_new, gpts_old))
+                raise ValueError(
+                    "the binned grid ({}) must not be larger than the far field ({}); "
+                    "binning only coarsens the grid, use abtem.PixelatedDetector with "
+                    "resample='uniform' to resample to a finer grid".format(
+                        gpts_new, gpts_old
+                    )
+                )
         return gpts_new
 
-    def allocate_measurement(self, waves, scan: abtem.scan.AbstractScan = None) -> abtem.Measurement:
+    def allocate_measurement(
+        self, waves, scan: abtem.scan.AbstractScan = None
+    ) -> abtem.Measurement:
         """
         Allocate a Measurement object or an hdf5 file.
 
@@ -619,18 +697,24 @@ class BinnedPixelatedDetector(abtem.PixelatedDetector):
 
         # The binned grid spans the same angular extent as the far field, so its angular sampling is the
         # far-field sampling scaled by the ratio of the far-field to binned grid size.
-        new_angular_sampling = (gpts_old[0] / gpts[0] * waves.angular_sampling[0],
-                                gpts_old[1] / gpts[1] * waves.angular_sampling[1])
+        new_angular_sampling = (
+            gpts_old[0] / gpts[0] * waves.angular_sampling[0],
+            gpts_old[1] / gpts[1] * waves.angular_sampling[1],
+        )
 
-        sampling = (1 / new_angular_sampling[0] / gpts[0] * waves.wavelength * 1000,
-                    1 / new_angular_sampling[1] / gpts[1] * waves.wavelength * 1000)
+        sampling = (
+            1 / new_angular_sampling[0] / gpts[0] * waves.wavelength * 1000,
+            1 / new_angular_sampling[1] / gpts[1] * waves.wavelength * 1000,
+        )
 
-        calibrations = abtem.detect.calibrations_from_grid(gpts,
-                                              sampling,
-                                              names=['alpha_x', 'alpha_y'],
-                                              units='mrad',
-                                              scale_factor=waves.wavelength * 1000,
-                                              fourier_space=True)
+        calibrations = abtem.detect.calibrations_from_grid(
+            gpts,
+            sampling,
+            names=["alpha_x", "alpha_y"],
+            units="mrad",
+            scale_factor=waves.wavelength * 1000,
+            fourier_space=True,
+        )
 
         if scan is None:
             scan_shape = ()
@@ -642,14 +726,16 @@ class BinnedPixelatedDetector(abtem.PixelatedDetector):
             scan_shape = scan.shape
             scan_calibrations = scan.calibrations
 
-        if self._mode == 'intensity':
+        if self._mode == "intensity":
             array = np.zeros(scan_shape + gpts, dtype=np.float32)
-        elif self._mode == 'complex':
+        elif self._mode == "complex":
             array = np.zeros(scan_shape + gpts, dtype=np.complex64)
         else:
             raise ValueError()
 
-        measurement = abtem.Measurement(array, calibrations=scan_calibrations + calibrations)
+        measurement = abtem.Measurement(
+            array, calibrations=scan_calibrations + calibrations
+        )
         if isinstance(self.save_file, str):
             measurement = measurement.write(self.save_file)
         return measurement
@@ -672,13 +758,13 @@ class BinnedPixelatedDetector(abtem.PixelatedDetector):
         """
 
         xp = abtem.device.get_array_module(waves.array)
-        abs2 = abtem.device.get_device_function(xp, 'abs2')
+        abs2 = abtem.device.get_device_function(xp, "abs2")
 
         waves = waves.far_field(max_angle=self.max_angle)
 
-        if self._mode == 'intensity':
+        if self._mode == "intensity":
             array = abs2(waves.array)
-        elif self._mode == 'complex':
+        elif self._mode == "complex":
             array = waves.array
         else:
             raise ValueError()
@@ -689,6 +775,8 @@ class BinnedPixelatedDetector(abtem.PixelatedDetector):
         gpts_old = array.shape[-2:]
         gpts_new = self._binned_gpts(gpts_old)
         array = _mean_bin_axis(array, gpts_old[1], gpts_new[1], xp)
-        array = _mean_bin_axis(array.swapaxes(-2, -1), gpts_old[0], gpts_new[0], xp).swapaxes(-2, -1)
+        array = _mean_bin_axis(
+            array.swapaxes(-2, -1), gpts_old[0], gpts_new[0], xp
+        ).swapaxes(-2, -1)
 
         return array

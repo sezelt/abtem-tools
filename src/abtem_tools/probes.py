@@ -17,13 +17,17 @@ class PositionAwareProbe(abtem.Probe):
     can be used with a mixed list of detectors.
     """
 
-    def scan(self,
-             scan: abtem.scan.AbstractScan,
-             detectors: Union[abtem.detect.AbstractDetector, Sequence[abtem.detect.AbstractDetector]],
-             potential: abtem.potentials.AbstractPotential,
-             measurements: Union[abtem.Measurement, dict] = None,
-             max_batch: int = None,
-             pbar: bool = True) -> Union[abtem.Measurement, List[abtem.Measurement]]:
+    def scan(
+        self,
+        scan: abtem.scan.AbstractScan,
+        detectors: Union[
+            abtem.detect.AbstractDetector, Sequence[abtem.detect.AbstractDetector]
+        ],
+        potential: abtem.potentials.AbstractPotential,
+        measurements: Union[abtem.Measurement, dict] = None,
+        max_batch: int = None,
+        pbar: bool = True,
+    ) -> Union[abtem.Measurement, List[abtem.Measurement]]:
         """
         Raster scan the probe across the potential and record a measurement for each detector, passing the
         probe positions of each batch to any detector that defines a ``detect_at`` method.
@@ -37,9 +41,11 @@ class PositionAwareProbe(abtem.Probe):
 
         positions = scan.get_positions()
 
-        for indices, exit_probes in self.generate_probes(scan, potential, max_batch, pbar):
+        for indices, exit_probes in self.generate_probes(
+            scan, potential, max_batch, pbar
+        ):
             for detector, measurement in measurements.items():
-                if hasattr(detector, 'detect_at'):
+                if hasattr(detector, "detect_at"):
                     new_entries = detector.detect_at(exit_probes, positions[indices])
                 else:
                     new_entries = detector.detect(exit_probes)
